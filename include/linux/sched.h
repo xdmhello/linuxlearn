@@ -954,6 +954,7 @@ struct task_struct {
 
 	struct sched_info		sched_info;
 
+	//进程管理子系统把所有进程链接在一条进程链表上，头节点是0号线程的成员tasks，链表节点是每个进程的成员tasks。对于线程组，只把组长加入进程链表。
 	struct list_head		tasks;
 	struct plist_node		pushable_tasks;
 	struct rb_node			pushable_dl_tasks;
@@ -1081,6 +1082,7 @@ struct task_struct {
 	 */
 	struct list_head		children;
 	struct list_head		sibling;
+	//一个线程组的所有线程链接在一条线程链表上，头节点是组长的成员thread_group，链表节点是线程的成员thread_group。线程的成员group_leader指向组长的进程描述符，成员tgid是线程组标识符，成员pid存放自己的进程标识符。
 	struct task_struct		*group_leader;
 
 	/*

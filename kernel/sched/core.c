@@ -4675,73 +4675,183 @@ late_initcall(sched_core_sysctl_init);
 /*
  * fork()/clone()-time setup:
  */
+// int sched_fork(u64 clone_flags, struct task_struct *p)
+// {
+// 	__sched_fork(clone_flags, p);
+// 	/*
+// 	 * We mark the process as NEW here. This guarantees that
+// 	 * nobody will actually run it, and a signal or other external
+// 	 * event cannot wake it up and insert it on the runqueue either.
+// 	 */
+// 	p->__state = TASK_NEW;
+
+// 	/*
+// 	 * Make sure we do not leak PI boosting priority to the child.
+// 	 */
+// 	p->prio = current->normal_prio;
+
+// 	uclamp_fork(p);
+
+// 	/*
+// 	 * Revert to default priority/policy on fork if requested.
+// 	 */
+// 	if (unlikely(p->sched_reset_on_fork)) {
+// 		if (task_has_dl_policy(p) || task_has_rt_policy(p)) {
+// 			p->policy = SCHED_NORMAL;
+// 			p->static_prio = NICE_TO_PRIO(0);
+// 			p->rt_priority = 0;
+// 		} else if (PRIO_TO_NICE(p->static_prio) < 0)
+// 			p->static_prio = NICE_TO_PRIO(0);
+
+// 		p->prio = p->normal_prio = p->static_prio;
+// 		set_load_weight(p, false);
+// 		p->se.custom_slice = 0;
+// 		p->se.slice = sysctl_sched_base_slice;
+
+// 		/*
+// 		 * We don't need the reset flag anymore after the fork. It has
+// 		 * fulfilled its duty:
+// 		 */
+// 		p->sched_reset_on_fork = 0;
+// 	}
+
+// 	if (dl_prio(p->prio))
+// 		return -EAGAIN;
+
+// 	scx_pre_fork(p);
+
+// 	if (rt_prio(p->prio)) {
+// 		p->sched_class = &rt_sched_class;
+// #ifdef CONFIG_SCHED_CLASS_EXT
+// 	} else if (task_should_scx(p->policy)) {
+// 		p->sched_class = &ext_sched_class;
+// #endif
+// 	} else {
+// 		p->sched_class = &fair_sched_class;
+// 	}
+
+// 	init_entity_runnable_average(&p->se);
+
+
+// #ifdef CONFIG_SCHED_INFO
+// 	if (likely(sched_info_on()))
+// 		memset(&p->sched_info, 0, sizeof(p->sched_info));
+// #endif
+// 	p->on_cpu = 0;
+// 	init_task_preempt_count(p);
+// 	plist_node_init(&p->pushable_tasks, MAX_PRIO);
+// 	RB_CLEAR_NODE(&p->pushable_dl_tasks);
+
+// 	return 0;
+// }
+
+
+// sched_fork()：在新进程刚创建好时，初始化它的调度信息。
+// clone_flags: 表示进程是怎么创建的（比如CLONE_VM表示共享内存）
+// p: 指向新创建的进程描述符 task_struct（内核里的“PCB”）
 int sched_fork(u64 clone_flags, struct task_struct *p)
 {
+	// 调用底层的初始化函数，设置基本的调度字段
 	__sched_fork(clone_flags, p);
+
 	/*
-	 * We mark the process as NEW here. This guarantees that
-	 * nobody will actually run it, and a signal or other external
-	 * event cannot wake it up and insert it on the runqueue either.
+	 * 给子进程打上“刚出生”的标记 TASK_NEW。
+	 * 这个状态告诉内核：“它还没准备好运行”，
+	 * 所以不会被调度器放到CPU上执行，
+	 * 也不会被信号或事件唤醒。
 	 */
 	p->__state = TASK_NEW;
 
 	/*
-	 * Make sure we do not leak PI boosting priority to the child.
+	 * 确保新进程不会继承父进程的“临时加优先级”。
+	 * （比如父进程因为等待锁被临时提高优先级）
+	 * 子进程要从“正常优先级”开始。
 	 */
 	p->prio = current->normal_prio;
 
+	// uclamp 是一种限制CPU使用率的机制（energy-aware scheduling）
 	uclamp_fork(p);
 
 	/*
-	 * Revert to default priority/policy on fork if requested.
+	 * 如果父进程要求在fork后重置调度策略，
+	 * 那么这里恢复子进程为默认的普通调度策略。
 	 */
 	if (unlikely(p->sched_reset_on_fork)) {
+
+		// 如果父进程是实时任务（RT或Deadline）
+		// 那么子进程重置为普通调度策略 SCHED_NORMAL。
 		if (task_has_dl_policy(p) || task_has_rt_policy(p)) {
-			p->policy = SCHED_NORMAL;
-			p->static_prio = NICE_TO_PRIO(0);
-			p->rt_priority = 0;
-		} else if (PRIO_TO_NICE(p->static_prio) < 0)
+			p->policy = SCHED_NORMAL;          // 普通调度策略
+			p->static_prio = NICE_TO_PRIO(0);  // 默认nice=0
+			p->rt_priority = 0;                // 实时优先级清零
+		}
+		// 如果是普通任务，但nice值小于0（即优先级太高），重置为0
+		else if (PRIO_TO_NICE(p->static_prio) < 0)
 			p->static_prio = NICE_TO_PRIO(0);
 
+		// 更新最终优先级
 		p->prio = p->normal_prio = p->static_prio;
+
+		// 更新权重（调度器用来计算谁先执行的“分数”）
 		set_load_weight(p, false);
+
+		// 时间片相关设置（子进程用的时间片长度）
 		p->se.custom_slice = 0;
 		p->se.slice = sysctl_sched_base_slice;
 
-		/*
-		 * We don't need the reset flag anymore after the fork. It has
-		 * fulfilled its duty:
-		 */
+		// 清除这个“重置标志”
 		p->sched_reset_on_fork = 0;
 	}
 
+	/*
+	 * 如果子进程是deadline调度任务（优先级极高）
+	 * 内核会拒绝再创建一个（避免调度混乱）
+	 */
 	if (dl_prio(p->prio))
 		return -EAGAIN;
 
+	// 让调度器扩展模块（sched_ext）在fork前有机会做自定义操作
 	scx_pre_fork(p);
 
+	/*
+	 * 根据任务的优先级类型，选择对应的调度类。
+	 * 调度类是内核用来决定“怎么分配CPU时间”的一套规则。
+	 */
 	if (rt_prio(p->prio)) {
+		// 实时任务（Real-Time）使用 rt_sched_class
 		p->sched_class = &rt_sched_class;
+
 #ifdef CONFIG_SCHED_CLASS_EXT
+	// 如果系统启用了扩展调度类（外部模块）
 	} else if (task_should_scx(p->policy)) {
 		p->sched_class = &ext_sched_class;
 #endif
+
 	} else {
+		// 普通任务（Fair Scheduling，CFS）使用公平调度类
 		p->sched_class = &fair_sched_class;
 	}
 
+	// 初始化新进程的调度统计数据（比如CPU使用率的滑动平均）
 	init_entity_runnable_average(&p->se);
 
-
 #ifdef CONFIG_SCHED_INFO
+	// 如果启用了调度统计信息，则清零
 	if (likely(sched_info_on()))
 		memset(&p->sched_info, 0, sizeof(p->sched_info));
 #endif
+
+	// 说明它现在还不在CPU上运行
 	p->on_cpu = 0;
+
+	// 初始化抢占计数（防止在fork阶段被打断）
 	init_task_preempt_count(p);
+
+	// 初始化两个红黑树节点，用于管理“可推送的实时任务”等
 	plist_node_init(&p->pushable_tasks, MAX_PRIO);
 	RB_CLEAR_NODE(&p->pushable_dl_tasks);
 
+	// 成功返回
 	return 0;
 }
 
